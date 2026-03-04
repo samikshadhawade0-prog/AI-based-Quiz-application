@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Live Quiz - Student</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="{{ url_for('static', filename='css/ui-system.css') }}" rel="stylesheet">
+<style>
+.option-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.opt {
+  border: 0;
+  border-radius: 14px;
+  padding: 12px;
+  min-height: 62px;
+  text-align: left;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #fff;
+}
+.opt:disabled { opacity: .78; }
+.c1 { background: #ef4444; }
+.c2 { background: #f59e0b; color: #1f2937; }
+.c3 { background: #2563eb; }
+.c4 { background: #7c3aed; }
+
+.answer-feedback {
+  border-radius: 16px;
+  padding: 16px 12px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  color: #fff;
+  text-align: center;
+}
+.answer-feedback.correct {
+  background: linear-gradient(145deg, #22c55e, #16a34a);
+  border-color: rgba(34, 197, 94, .55);
+}
+.answer-feedback.wrong {
+  background: linear-gradient(145deg, #ef4444, #dc2626);
+  border-color: rgba(239, 68, 68, .55);
+}
+.answer-feedback.pending {
+  background: linear-gradient(145deg, #7c3aed, #5b21b6);
+  border-color: rgba(124, 58, 237, .55);
+}
+.fb-title { font-size: 1.25rem; font-weight: 800; }
+.fb-points { font-size: 1.35rem; font-weight: 800; }
+.fb-meta { margin-top: 8px; font-size: .92rem; opacity: .95; }
+.pending-loader {
+  width: 76px;
+  height: 76px;
+  margin: 6px auto 2px;
+  border-radius: 50%;
+  border: 10px solid rgba(255,255,255,.32);
+  border-top-color: #fff;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 760px) { .option-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body class="app-bg theme-{{ session.get('theme_mode', 'light') }} font-{{ session.get('font_scale', 'medium') }}">
+<nav class="navbar navbar-expand-lg topbar">
+  <div class="container-fluid">
+    <span class="navbar-brand">Quiz App</span>
+    <div class="d-flex gap-2">
+      <span class="chip" id="metaTitle">Waiting for teacher...</span>
+      <span class="chip d-none" id="timerBadge">Time Left: <span id="timeLeft">0</span>s</span>
+    </div>
+  </div>
+</nav>
+
+<div class="page-wrap" style="max-width:920px;">
+  <div class="glass-card p-4">
+    <h2 id="questionBox" class="mb-3">Quiz will start shortly.</h2>
+    <div id="feedbackBox"></div>
+    <div id="optionsBox" class="option-grid"></div>
+  </div>
+</div>
+
+<script>
+const sessionId = "{{ session_id }}";
+const playerName = "{{ player_name }}";
+const optionClasses = ["c1", "c2", "c3", "c4"];
+
+let currentQuestionId = null;
+let selectedAnswer = null;
+let submittedThisQuestion = false;
+
+function rankLabel(rank) {
+  if (!rank) return "-";
+  const j = rank % 10, k = rank % 100;
+  if (j === 1 && k !== 11) return `${rank}st`;
+  if (j === 2 && k !== 12) return `${rank}nd`;
+  if (j === 3 && k !== 13) return `${rank}rd`;
+  return `${rank}th`;
+}
+
+function showQuestionView() {
+  document.getElementById("questionBox").classList.remove("d-none");
+  document.getElementById("optionsBox").classList.remove("d-none");
+}
+
+function showFeedbackOnlyView() {
+  document.getElementById("questionBox").classList.add("d-none");
+  document.getElementById("optionsBox").classList.add("d-none");
+}
+
+function renderPending() {
+  document.getElementById("feedbackBox").innerHTML = `
+    <div class="answer-feedback pending">
+      <div class="pending-loader"></div>
+      <div class="fb-title">A bit too swift?</div>
+      <div class="fb-meta">Answer locked. Reveal after timer ends.</div>
+    </div>
+  `;
+}
+
+function renderFeedback(info) {
+  const box = document.getElementById("feedbackBox");
+  const correct = !!info.correct;
+  const cls = correct ? "correct" : "wrong";
+  const title = correct ? "Correct" : "Wrong";
+  const points = Number(info.score || 0);
+  const rank = info.rank || info.your_rank;
+  const totalPlayers = info.total_players || info.your_total_players || 0;
+  const totalScore = info.total_score || info.your_total_score || 0;
+  const pointsToNext = info.points_to_next ?? info.your_points_to_next;
+  const nextPlayer = info.next_player || info.your_next_player;
+
+  let subLine = "";
+  if (rank && totalPlayers) {
+    subLine = `You're in ${rankLabel(rank)} place out of ${totalPlayers}.`;
+  }
+  if (rank && rank > 1 && pointsToNext !== null && nextPlayer) {
+    subLine += ` ${pointsToNext} points behind ${nextPlayer}.`;
+  }
+
+  box.innerHTML = `
+    <div class="answer-feedback ${cls}">
+      <div class="fb-title">${title}</div>
+      <div class="display-6">${correct ? "✓" : "✕"}</div>
+      <div class="fb-points">${points > 0 ? "+" : ""}${points} points</div>
+      <div class="fb-meta">Total Score: ${totalScore}</div>
+      <div class="fb-meta">${subLine}</div>
+    </div>
+  `;
+}
+
+function renderWaiting(text) {
+  document.getElementById("metaTitle").innerText = "Waiting";
+  document.getElementById("questionBox").innerText = text;
+  document.getElementById("optionsBox").innerHTML = "";
+  document.getElementById("feedbackBox").innerHTML = "";
+  document.getElementById("timerBadge").classList.add("d-none");
+  showQuestionView();
+}
+
+function disableOptions() {
+  document.querySelectorAll(".opt").forEach(btn => { btn.disabled = true; });
+}
+
+function renderQuestion(data) {
+  document.getElementById("metaTitle").innerText = `Question ${data.question_number}`;
+  document.getElementById("questionBox").innerText = data.question_text;
+  document.getElementById("timerBadge").classList.remove("d-none");
+  document.getElementById("timeLeft").innerText = data.time_left;
+
+  const optionsBox = document.getElementById("optionsBox");
+  optionsBox.innerHTML = "";
+  data.options.forEach((opt, index) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `opt ${optionClasses[index % optionClasses.length]}`;
+    btn.innerText = opt;
+    btn.dataset.option = opt;
+    btn.addEventListener("click", () => submitAnswer(opt, btn));
+    optionsBox.appendChild(btn);
+  });
+
+  if (data.phase === "question" && data.your_submitted) {
+    submittedThisQuestion = true;
+    selectedAnswer = data.your_answer || selectedAnswer;
+    disableOptions();
+    showFeedbackOnlyView();
+    renderPending();
+    return;
+  }
+
+  showQuestionView();
+}
+
+function showReveal(data) {
+  disableOptions();
+  document.getElementById("timeLeft").innerText = 0;
+  showFeedbackOnlyView();
+
+  const correct = data.your_submitted ? !!data.your_correct : false;
+  const score = data.your_submitted ? (data.your_score_awarded || 0) : 0;
+  renderFeedback({
+    correct: correct,
+    score: score,
+    your_rank: data.your_rank,
+    your_total_players: data.your_total_players,
+    your_total_score: data.your_total_score,
+    your_points_to_next: data.your_points_to_next,
+    your_next_player: data.your_next_player
+  });
+}
+
+function submitAnswer(rawChoice, btn) {
+  if (submittedThisQuestion) return;
+  submittedThisQuestion = true;
+  selectedAnswer = rawChoice;
+  disableOptions();
+  showFeedbackOnlyView();
+  renderPending();
+
+  fetch("/submit_answer", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      session_id: sessionId,
+      player_name: playerName,
+      answer: rawChoice
+    })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.success) {
+      document.getElementById("feedbackBox").innerHTML = `<div class="alert alert-danger">${data.message || "Submission failed"}</div>`;
+      submittedThisQuestion = false;
+      return;
+    }
+    // Keep pending view; correct/wrong shows only on reveal phase.
+  })
+  .catch(() => {
+    document.getElementById("feedbackBox").innerHTML = `<div class="alert alert-warning">Connection issue. Retrying...</div>`;
+  });
+}
+
+function pollState() {
+  const qp = encodeURIComponent(playerName || "");
+  fetch(`/get_current_question/${sessionId}?player_name=${qp}`)
+    .then(r => r.json())
+    .then(data => {
+      if (data.finished) {
+        const fallback = `/final_podium/${sessionId}?player=${encodeURIComponent(playerName || "")}`;
+        window.location.href = data.leaderboard_url || fallback;
+        return;
+      }
+      if (!data.started) {
+        renderWaiting("Teacher has not started the quiz yet.");
+        return;
+      }
+
+      if (currentQuestionId !== data.question_id) {
+        currentQuestionId = data.question_id;
+        selectedAnswer = null;
+        submittedThisQuestion = false;
+        document.getElementById("feedbackBox").innerHTML = "";
+      }
+      if (currentQuestionId === data.question_id && data.phase === "question" && !data.your_submitted) {
+        submittedThisQuestion = false;
+      }
+
+      renderQuestion(data);
+      if (data.phase === "reveal") {
+        showReveal(data);
+      }
+    })
+    .catch(() => {
+      renderWaiting("Reconnecting...");
+    });
+}
+
+setInterval(pollState, 1000);
+pollState();
+</script>
+</body>
+</html>

@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Live Quiz - Teacher</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="{{ url_for('static', filename='css/ui-system.css') }}" rel="stylesheet">
+<style>
+.opt-card { border-radius: 14px; padding: 12px; border: 1px solid var(--border); background: var(--card); }
+.opt-card.correct { border-color: #22c55e; box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.35); }
+.players { color: var(--muted); font-size: .92rem; }
+.rank-box { border-radius: 14px; padding: 12px; border: 1px solid var(--border); background: var(--card); }
+.rank-row { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.rank-row:last-child { margin-bottom: 0; }
+.result-board {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: var(--card);
+}
+.bar-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+  min-height: 190px;
+}
+.bar-col { text-align: center; }
+.bar-count { font-weight: 800; margin-bottom: 6px; }
+.bar {
+  height: 40px;
+  border-radius: 8px 8px 0 0;
+  transition: height .3s ease;
+}
+.bar-opt { font-weight: 700; margin-top: 6px; font-size: .9rem; }
+.bar-red { background:#ef4444; }
+.bar-blue { background:#2563eb; }
+.bar-yellow { background:#f59e0b; }
+.bar-green { background:#16a34a; }
+.bar-correct { box-shadow: 0 0 0 3px rgba(34,197,94,.35) inset; }
+</style>
+</head>
+<body class="app-bg theme-{{ session.get('theme_mode', 'light') }} font-{{ session.get('font_scale', 'medium') }}">
+<nav class="navbar navbar-expand-lg topbar">
+    <div class="container-fluid">
+        <span class="navbar-brand">Quiz App</span>
+        <div class="d-flex align-items-center gap-2">
+            <span class="chip">Session #{{ session_id }}</span>
+            {% if question %}
+            <span class="chip">Time Left: <span id="timeLeft">{{ question['time_left'] }}</span>s</span>
+            {% endif %}
+        </div>
+    </div>
+</nav>
+
+<div class="page-wrap">
+    <div class="glass-card p-4">
+        {% if question %}
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <span class="stat-badge">Question {{ question['question_number'] }} of {{ total_questions }}</span>
+        </div>
+        <h2 class="mb-3">{{ question['question_text'] }}</h2>
+
+        <div id="resultBoard" class="result-board mb-3 {% if question['phase'] != 'reveal' %}d-none{% endif %}">
+            <div class="fw-bold mb-2">Answer Distribution</div>
+            <div class="bar-grid">
+                {% for opt in options %}
+                {% set c = answer_stats.get(opt['option_text'], {}).get('count', 0) %}
+                <div class="bar-col">
+                    <div class="bar-count" id="bar_count_{{ loop.index0 }}">{{ c }}</div>
+                    <div
+                        id="bar_{{ loop.index0 }}"
+                        class="bar {% if loop.index0 == 0 %}bar-red{% elif loop.index0 == 1 %}bar-blue{% elif loop.index0 == 2 %}bar-yellow{% else %}bar-green{% endif %} {% if opt['is_correct'] == 1 %}bar-correct{% endif %}"
+                        style="height: {{ 40 + (c * 14) }}px;"
+                    ></div>
+                    <div class="bar-opt">{{ opt['option_text'] }}</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div id="optionsBox" class="row g-2">
+            {% for opt in options %}
+            <div class="col-12">
+                <div class="opt-card {% if question['phase'] == 'reveal' and opt['is_correct'] == 1 %}correct{% endif %}" data-text="{{ opt['option_text'] }}" data-correct="{{ opt['is_correct'] }}">
+                    <div class="d-flex justify-content-between gap-2">
+                        <strong>{{ opt['option_text'] }}</strong>
+                        <span class="chip" id="count_{{ loop.index0 }}">{{ answer_stats.get(opt['option_text'], {}).get('count', 0) }}</span>
+                    </div>
+                    <div class="players mt-2" id="players_{{ loop.index0 }}">
+                        {% set p = answer_stats.get(opt['option_text'], {}).get('players', []) %}
+                        {% if p %}{{ p|join(', ') }}{% else %}No selections yet{% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div id="revealBanner" class="alert alert-success {% if question['phase'] != 'reveal' %}d-none{% endif %} mt-3">
+            Correct answer revealed.
+        </div>
+
+        <div id="speedRankBox" class="rank-box mt-3 {% if question['phase'] != 'reveal' %}d-none{% endif %}">
+            <div class="fw-bold mb-2">Fastest Correct Students</div>
+            <div id="top3Wrap">
+                {% set top3 = question_ranking.get('top3', []) %}
+                {% if top3 %}
+                {% for row in top3 %}
+                <div class="rank-row"><span>#{{ loop.index }} {{ row['player_name'] }}</span><span>{{ row['response_ms'] }} ms</span></div>
+                {% endfor %}
+                {% else %}
+                <div class="rank-row"><span>No correct answers yet</span><span>-</span></div>
+                {% endif %}
+            </div>
+            <hr>
+            <div class="fw-bold mb-2">All Students (This Question)</div>
+            <div id="allRankWrap">
+                {% set all_rows = question_ranking.get('rows', []) %}
+                {% if all_rows %}
+                {% for row in all_rows %}
+                <div class="rank-row">
+                    <span>{{ loop.index }}. {{ row['player_name'] }}</span>
+                    <span>{% if row['status'] == 'correct' %}Correct in {{ row['response_ms'] }} ms{% elif row['status'] == 'wrong' %}Wrong{% else %}No Answer{% endif %}</span>
+                </div>
+                {% endfor %}
+                {% else %}
+                <div class="rank-row"><span>No student data</span><span>-</span></div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="d-flex gap-2 flex-wrap mt-3 {% if question['phase'] != 'reveal' %}d-none{% endif %}" id="controls">
+            {% if has_next %}
+            <a class="btn btn-brand" href="{{ url_for('live_leaderboard', session_id=session_id) }}">Next: Scoreboard</a>
+            {% else %}
+            <a class="btn btn-outline-danger" href="{{ url_for('final_podium', session_id=session_id) }}">Show Final Podium</a>
+            {% endif %}
+        </div>
+        {% else %}
+        <h3>Quiz Finished</h3>
+        <a class="btn btn-brand mt-2" href="{{ url_for('final_podium', session_id=session_id) }}">Open Final Podium</a>
+        {% endif %}
+    </div>
+</div>
+
+{% if question %}
+<script>
+let timeLeft = {{ question['time_left'] }};
+const options = document.querySelectorAll(".opt-card");
+const resultBoard = document.getElementById("resultBoard");
+const controls = document.getElementById("controls");
+const revealBanner = document.getElementById("revealBanner");
+const speedRankBox = document.getElementById("speedRankBox");
+const timerEl = document.getElementById("timeLeft");
+let revealed = {{ 'true' if question['phase'] == 'reveal' else 'false' }};
+
+function updateReveal() {
+  options.forEach((el) => {
+    if (el.dataset.correct === "1") {
+      el.classList.add("correct");
+    }
+  });
+  controls.classList.remove("d-none");
+  revealBanner.classList.remove("d-none");
+  speedRankBox.classList.remove("d-none");
+  resultBoard.classList.remove("d-none");
+  revealed = true;
+}
+
+function tickTimer() {
+  if (revealed) return;
+  if (timeLeft > 0) {
+    timeLeft -= 1;
+    timerEl.innerText = timeLeft;
+  }
+  if (timeLeft <= 0) {
+    updateReveal();
+  }
+}
+
+function fetchCounts() {
+  fetch("/get_answer_counts/{{ session_id }}/{{ question['question_id'] }}")
+    .then(r => r.json())
+    .then(data => {
+      options.forEach((opt, i) => {
+        const txt = opt.dataset.text;
+        const state = data[txt] || {count: 0, players: []};
+        document.getElementById("count_" + i).innerText = state.count;
+        document.getElementById("players_" + i).innerText = state.players.length ? state.players.join(", ") : "No selections yet";
+        const bar = document.getElementById("bar_" + i);
+        const barCount = document.getElementById("bar_count_" + i);
+        if (bar && barCount) {
+          barCount.innerText = state.count;
+          bar.style.height = `${40 + (state.count * 14)}px`;
+        }
+      });
+    });
+}
+
+function fetchRanking() {
+  fetch("/get_question_ranking/{{ session_id }}/{{ question['question_id'] }}")
+    .then(r => r.json())
+    .then(data => {
+      const top3 = data.top3 || [];
+      const rows = data.rows || [];
+      document.getElementById("top3Wrap").innerHTML = top3.length
+        ? top3.map((row, idx) => `<div class="rank-row"><span>#${idx + 1} ${row.player_name}</span><span>${row.response_ms} ms</span></div>`).join("")
+        : '<div class="rank-row"><span>No correct answers yet</span><span>-</span></div>';
+
+      document.getElementById("allRankWrap").innerHTML = rows.length
+        ? rows.map((row, idx) => {
+            const tag = row.status === "correct" ? `Correct in ${row.response_ms} ms` : (row.status === "wrong" ? "Wrong" : "No Answer");
+            return `<div class="rank-row"><span>${idx + 1}. ${row.player_name}</span><span>${tag}</span></div>`;
+          }).join("")
+        : '<div class="rank-row"><span>No student data</span><span>-</span></div>';
+    });
+}
+
+setInterval(tickTimer, 1000);
+setInterval(fetchCounts, 1600);
+setInterval(fetchRanking, 1600);
+fetchCounts();
+fetchRanking();
+if (revealed) updateReveal();
+</script>
+{% endif %}
+</body>
+</html>
