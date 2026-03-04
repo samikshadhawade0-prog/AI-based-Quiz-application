@@ -4,5 +4,6 @@ pymysql
 gunicorn
 cryptography
 mysql-connector-python
+python-dotenv
 
 
