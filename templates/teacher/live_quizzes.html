@@ -32,7 +32,7 @@
                     <p>{{ quiz['description'] or "No description" }}</p>
                     <div class="d-flex flex-wrap gap-2 mb-3">
                         <span class="stat-badge">Questions: {{ quiz['question_count'] or 0 }}</span>
-                        <span class="stat-badge">Created: {{ quiz['created_at'][:10] }}</span>
+                        <span class="stat-badge">Created: {{ quiz['created_at'].strftime('%Y-%m-%d') if quiz['created_at'] else '-' }}</span>
                     </div>
                     <div class="d-grid gap-2 mt-auto">
                         <a href="/start_quiz/{{ quiz['quiz_id'] }}" class="btn btn-brand btn-sm">Start</a>
@@ -73,3 +73,4 @@ function confirmDeleteQuiz(quizId) {
 </script>
 </body>
 </html>
+
